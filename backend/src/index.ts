@@ -4,6 +4,7 @@ import { Server } from "socket.io";
 import { Client, LocalAuth, MessageMedia, WAState } from "whatsapp-web.js";
 import { upsertChat, createMessage, getMessagesByChat } from "./data";
 import prisma from './prisma';
+import qrcode from 'qrcode-terminal'; // For terminal QR display
 
 const app = express();
 const server = http.createServer(app);
@@ -15,35 +16,79 @@ let clientReady = false;
 
 const client = new Client({
     authStrategy: new LocalAuth({ clientId: "bot" }),
+    puppeteer: {
+        headless: true, // Run headless for production/server
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox'
+        ]
+    }
 });
 
 client.on("qr", (qr) => {
     console.log("QR Code Received");
     currentQR = qr;
     clientReady = false;
+    io.emit("status", "QR Code Received");
     io.emit("qr", qr);
+    // Optionally display QR in terminal for debugging
+    qrcode.generate(qr, { small: true });
 });
 
 client.on("ready", async () => {
-    console.log("WhatsApp client is ready");
-    currentQR = null;
+    console.log('[READY_EVENT] Client is ready! Starting chat processing...');
     clientReady = true;
+    currentQR = null; // Clear QR code
+    io.emit('status', 'WhatsApp Ready'); // Emit global status
+    io.emit('ready'); // Emit ready event
+
     try {
-        const chats = await client.getChats();
-        currentChats = chats
-            .filter(chat => !chat.isGroup)
-            .map((chat) => ({
-                id: chat.id._serialized,
-                name: chat.name || chat.id.user || "Unknown",
-                lastMessage: chat.lastMessage?.body || '',
-                timestamp: chat.timestamp,
-            }));
-        io.emit("ready");
-        io.emit("chats", currentChats);
-        console.log(`Emitted ${currentChats.length} chats.`);
+        console.log('[READY_EVENT] Fetching chats...');
+        const fetchedChats = await client.getChats();
+        console.log(`[READY_EVENT] Fetched ${fetchedChats.length} chats. Mapping...`);
+        currentChats = await Promise.all(
+            fetchedChats
+                // Filter out groups for simplicity in this example if needed
+                // .filter(chat => !chat.isGroup)
+                .map(async (chat, index) => {
+                    console.log(`[READY_EVENT] Processing chat ${index + 1}/${fetchedChats.length}: ${chat.id._serialized}`);
+                    // Upsert chat in DB
+                    await upsertChat(chat.id._serialized, chat.name);
+                    // Fetch last message (consider limiting this for performance)
+                    console.log(`[READY_EVENT] Fetching messages for chat ${chat.id._serialized}...`);
+                    const messages = await chat.fetchMessages({ limit: 1 });
+                    const lastMessage = messages[0]; // Might be undefined if no messages
+                    console.log(`[READY_EVENT] Done processing chat ${chat.id._serialized}`);
+
+                    return {
+                        id: chat.id._serialized,
+                        name: chat.name || chat.id.user,
+                        isGroup: chat.isGroup,
+                        lastMessage: lastMessage ? lastMessage.body : 'No messages yet',
+                        timestamp: lastMessage ? new Date(lastMessage.timestamp * 1000) : new Date(),
+                        unreadCount: chat.unreadCount, // Added unreadCount
+                    };
+                })
+        );
+        console.log('[READY_EVENT] Chat mapping complete. Emitting chats to all clients...');
+        io.emit('chats', currentChats);
+        console.log('[READY_EVENT] Chats emitted.');
     } catch (err) {
-        console.error("Error fetching or emitting chats on ready:", err);
+        console.error('[READY_EVENT] Error fetching or processing chats on ready:', err);
+        // Optionally emit an error to the frontend
+        io.emit('status', 'Error loading chats');
     }
+});
+
+client.on('auth_failure', (msg) => {
+    // Fired if session restore was unsuccessful
+    console.error('AUTHENTICATION FAILURE:', msg);
+    clientReady = false;
+    currentQR = null; // Reset QR state
+    let retryCount = 0; // Reset retries as auth failed
+    io.emit('status', 'Authentication Failed');
+    io.emit('auth_failure'); // Inform frontend
+    // Consider stopping retries here or specific handling
 });
 
 client.on('disconnected', (reason) => {
@@ -51,13 +96,31 @@ client.on('disconnected', (reason) => {
     clientReady = false;
     currentQR = null;
     currentChats = [];
-    io.emit('disconnect_whatsapp');
+    io.emit('status', 'Disconnected');
+    io.emit('disconnect_whatsapp', reason);
+    // Attempt to re-initialize after a delay
+    console.log('Attempting to re-initialize WhatsApp client...');
+    setTimeout(() => initializeClient(), 5000); // Wait 5 seconds before retry
+});
+
+// Add state change monitoring
+client.on('change_state', state => {
+    console.log('WhatsApp client state changed to:', state);
+    io.emit('status', `State: ${state}`);
+    if (state === WAState.CONFLICT || state === WAState.UNPAIRED || state === WAState.UNLAUNCHED) {
+        // These states often require re-authentication (new QR)
+        clientReady = false;
+        currentQR = null;
+        currentChats = [];
+        console.log('Client state requires re-authentication. Attempting destroy and re-initialize.');
+        // Attempt to destroy and restart the client process to get a new QR
+        client.destroy().then(() => initializeClient()).catch(e => console.error('Error destroying client:', e));
+    }
 });
 
 client.on("message", async (message) => {
     try {
-        if (!message.from || !message.to || !message.body) return;
-
+        if (!message.from || !message.to) return; // Allow messages without body (e.g., media)
         const chatInst = await message.getChat();
         const chatName = chatInst.name || chatInst.id.user || 'Unknown';
         const chatRec = await upsertChat(chatInst.id._serialized, chatName);
@@ -77,10 +140,14 @@ client.on("message", async (message) => {
             fromMe: saved.fromMe,
             content: saved.content,
             timestamp: saved.timestamp.toISOString(),
+            type: saved.type
         };
         io.emit("message", emitMessage);
 
-        currentChats = currentChats.map(c => c.id === saved.chatId ? { ...c, lastMessage: saved.content, timestamp: saved.timestamp.getTime() } : c);
+        currentChats = currentChats.map(c =>
+            c.id === chatRec.chatId ? { ...c, lastMessage: saved.content, timestamp: saved.timestamp.getTime() / 1000 } : c
+        ).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)); // Keep sorted
+
     } catch (err) {
         console.error("Error processing/saving incoming message:", err);
     }
@@ -89,39 +156,68 @@ client.on("message", async (message) => {
 io.on("connection", async (socket) => {
     console.log(`Socket connected: ${socket.id}`);
 
-    try {
-        const state = await client.getState();
-        console.log(`Client state on connect: ${state}`);
-
-        if (state === WAState.CONNECTED && clientReady) {
-            console.log(`Sending 'ready' and ${currentChats.length} chats to ${socket.id}`);
-            socket.emit('ready');
-            socket.emit('chats', currentChats);
-        } else if (currentQR) {
-            console.log(`Sending stored QR to ${socket.id}`);
-            socket.emit('qr', currentQR);
-        } else {
-            console.log(`Client not ready and no QR available for ${socket.id}. Waiting for events.`);
-        }
-    } catch (err) {
-        console.error(`Error getting client state for ${socket.id}:`, err);
-        if (currentQR) {
-            console.log(`Sending stored QR to ${socket.id} (fallback)`);
-            socket.emit('qr', currentQR);
-        }
+    // Check flags instead of calling getState()
+    if (clientReady) {
+        console.log(`Client ready. Sending 'ready' and ${currentChats.length} chats to ${socket.id}`);
+        socket.emit('status', 'WhatsApp Ready'); // Send status first
+        socket.emit('ready');
+        socket.emit('chats', currentChats);
+    } else if (currentQR) {
+        console.log(`Client not ready, sending stored QR to ${socket.id}`);
+        socket.emit('status', 'QR Code Received'); // Send status first
+        socket.emit('qr', currentQR);
+    } else {
+        // Client not ready and no QR code available yet
+        console.log(`Client initializing, no QR yet for ${socket.id}. Waiting for events.`);
+        socket.emit('status', 'Initializing...');
     }
 
     socket.on("sendMessage", async ({ chatId, content }) => {
+        if (!clientReady) {
+            console.error("sendMessage failed: Client not ready");
+            socket.emit('send_error', { chatId, error: 'WhatsApp client not ready' });
+            return;
+        }
+        if (!chatId || !content) {
+            console.error("sendMessage failed: Missing chatId or content");
+            socket.emit('send_error', { chatId, error: 'Missing chatId or content' });
+            return;
+        }
+
         try {
             console.log(`Attempting to send message to ${chatId}`);
-            await client.sendMessage(chatId, content);
-            console.log(`Message sent successfully to ${chatId}`);
+            const sentMessage = await client.sendMessage(chatId, content);
+            console.log(`Message sent successfully to ${chatId}, ID: ${sentMessage.id._serialized}`);
+
+            const chatRec = await upsertChat(chatId); // Ensure chat exists
+            const savedOutgoing = await createMessage({
+                messageId: sentMessage.id._serialized,
+                chatId: chatRec.id, // Use the numeric ID from the DB record
+                fromMe: true,
+                content: content,
+                timestamp: new Date(sentMessage.timestamp * 1000),
+                type: sentMessage.type
+            });
+            console.log(`Outgoing message persisted: ${savedOutgoing.id}`);
+
         } catch (err) {
             console.error(`Error sending message to ${chatId}:`, err);
+            socket.emit('send_error', { chatId, error: `Failed to send message: ${err}` });
         }
     });
 
     socket.on("sendMedia", async ({ chatId, media }) => {
+        if (!clientReady) {
+            console.error("sendMedia failed: Client not ready");
+            socket.emit('send_error', { chatId, error: 'WhatsApp client not ready' });
+            return;
+        }
+        if (!chatId || !media || !media.mimetype || !media.data || !media.filename) {
+            console.error("sendMedia failed: Missing chatId or media details");
+            socket.emit('send_error', { chatId, error: 'Missing chatId or media details' });
+            return;
+        }
+
         try {
             console.log(`Attempting to send media to ${chatId}: ${media.filename}`);
             const mediaMessage = new MessageMedia(
@@ -129,10 +225,23 @@ io.on("connection", async (socket) => {
                 media.data,
                 media.filename
             );
-            await client.sendMessage(chatId, mediaMessage);
-            console.log(`Media sent successfully to ${chatId}`);
+            const sentMediaMessage = await client.sendMessage(chatId, mediaMessage);
+            console.log(`Media sent successfully to ${chatId}, ID: ${sentMediaMessage.id._serialized}`);
+
+            const chatRec = await upsertChat(chatId); // Ensure chat exists
+            const savedOutgoingMedia = await createMessage({
+                messageId: sentMediaMessage.id._serialized,
+                chatId: chatRec.id, // Use the numeric ID from the DB record
+                fromMe: true,
+                content: media.filename, // Store filename as content for media
+                timestamp: new Date(sentMediaMessage.timestamp * 1000),
+                type: sentMediaMessage.type
+            });
+            console.log(`Outgoing media message persisted: ${savedOutgoingMedia.id}`);
+
         } catch (err) {
             console.error(`Error sending media to ${chatId}:`, err);
+            socket.emit('send_error', { chatId, error: `Failed to send media: ${err}` });
         }
     });
 
@@ -144,7 +253,6 @@ io.on("connection", async (socket) => {
 app.get("/api/messages/:chatId", async (req: Request, res: Response) => {
     const stringChatId = req.params.chatId;
     try {
-        // 1. Find the chat record using the string ID to get the numeric ID
         const chat = await prisma.chat.findUnique({
             where: { chatId: stringChatId },
         });
@@ -154,16 +262,15 @@ app.get("/api/messages/:chatId", async (req: Request, res: Response) => {
             return res.status(404).json({ error: "Chat not found" });
         }
 
-        // 2. Fetch messages using the numeric chat ID
         const messages = await getMessagesByChat(chat.id);
 
-        // 3. Format messages for the frontend
         const formattedMessages = messages.map((m) => ({
             id: m.messageId,
+            chatId: m.chatId,
             fromMe: m.fromMe,
-            content: m.content, // Use the 'content' field saved from message.body
+            content: m.content,
             timestamp: m.timestamp.toISOString(),
-            type: m.type, // Include type if needed by frontend
+            type: m.type
         }));
         res.json(formattedMessages);
     } catch (error) {
@@ -188,6 +295,22 @@ app.get("/api/chats", async (req: Request, res: Response) => {
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
 
-client.initialize().catch(err => {
-    console.error("WhatsApp Client Initialization Error:", err);
-});
+// Wrap initialization in a function for retries
+async function initializeClient(retryCount = 0) {
+    console.log(`Initializing WhatsApp client (Attempt ${retryCount + 1})...`);
+    io.emit('status', 'Initializing...');
+    client.initialize().catch(err => {
+        console.error(`WhatsApp Client Initialization Error (Attempt ${retryCount + 1}):`, err);
+        io.emit('status', 'Initialization Error');
+        if (retryCount < 3) { // Limit retries
+            console.log(`Retrying initialization in 10 seconds...`);
+            setTimeout(() => initializeClient(retryCount + 1), 10000);
+        } else {
+            console.error('Max initialization retries reached. Please restart the application.');
+            io.emit('status', 'Initialization Failed - Restart Required');
+        }
+    });
+}
+
+// Start the initial client initialization
+initializeClient();
