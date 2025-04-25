@@ -1,18 +1,18 @@
 # Task List for WhatsApp Automation Prototype
 
 ## 1. Setup Monorepo Structure
-- [ ] Create `backend/` and `frontend/` directories with prescribed structure:
+- [x] Create `backend/` and `frontend/` directories with prescribed structure:
   - `backend/` holds server code, Prisma schema, configs.
   - `frontend/` holds React app, configs.
   - Root contains `prd.md`, `tasks.md`, shared `.env` and README.
 
 ## 2. Backend Initialization & Data Layer
-- [ ] Initialize Node.js/TypeScript project in `backend/`.
-  - [ ] Configure `tsconfig.json` and install core deps: express, socket.io, whatsapp-web.js, prisma, sqlite3.
-- [ ] Define Prisma schema (`Session`, `Chat`, `Message`) and run migrations.
-  - [ ] Configure SQLite datasource and generate `prisma/` folder.
-  - [ ] Execute `prisma migrate dev`.
-- [ ] Integrate Prisma Client in code for CRUD operations.
+- [x] Initialize Node.js/TypeScript project in `backend/`.
+  - [x] Configure `tsconfig.json` and install core deps: express, socket.io, whatsapp-web.js, prisma, sqlite3.
+- [x] Define Prisma schema (`Session`, `Chat`, `Message`) and run migrations.
+  - [x] Configure SQLite datasource and generate `prisma/` folder.
+  - [x] Execute `prisma migrate dev`.
+- [x] Integrate Prisma Client in code for CRUD operations.
 
 ## 3. WhatsApp Client & Real-time Layer (Backend)
 - [ ] Set up whatsapp-web.js client with `LocalAuth`.
