@@ -1,37 +1,61 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "sqlite"
-  url      = "file:./dev.db"
+  url      = env("DATABASE_URL") // Use environment variable for DB path
 }
 
+// Store session info for whatsapp-web.js LocalAuth strategy
+// Note: whatsapp-web.js LocalAuth stores session directly in files,
+// so this model might be more for tracking connection status or metadata
+// if not storing the session JSON blob directly here.
 model Session {
-  id        Int      @id @default(autoincrement())
-  sessionId String   @unique
+  id        String   @id @default(cuid())
+  clientId  String?  @unique // Optional: An identifier for this client instance
+  status    String   @default("disconnected") // e.g., disconnected, connecting, connected, error
+  lastSync  DateTime? // Timestamp of last successful connection or sync
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
+// Represents a WhatsApp Chat (direct or group)
 model Chat {
-  id        Int       @id @default(autoincrement())
-  chatId    String    @unique
-  name      String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id             String    @id // WhatsApp chat ID (e.g., '1234567890@c.us' or 'group-id@g.us')
+  name           String?   // Name of the contact or group (can change)
+  isGroup        Boolean   // Indicates if it's a group chat
+  lastMessageAt  DateTime? // Timestamp of the last known message for sorting
+  unreadCount    Int       @default(0) // Unread message count (may need manual updates from client events)
+  archived       Boolean   @default(false)
+  pinned         Boolean   @default(false)
+  messages       Message[] // Relation to messages in this chat
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  messages  Message[]
+  @@index([lastMessageAt]) // Index for sorting chats by last message time
 }
 
+// Represents a single WhatsApp Message
 model Message {
-  id         Int      @id @default(autoincrement())
-  messageId  String   @unique
-  chat       Chat     @relation(fields: [chatId], references: [id])
-  chatId     Int
-  fromMe     Boolean
-  content    String?
-  timestamp  DateTime
-  type       String
-  createdAt  DateTime @default(now())
+  id        String   @id // WhatsApp message ID (e.g., 'true_12345@c.us_ABCDEF12345')
+  chatId    String   // Foreign key to Chat
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade) // Cascade delete messages if chat is deleted
+  timestamp DateTime // Timestamp from WhatsApp (when the message was sent/received)
+  fromMe    Boolean  // True if the message was sent by the bot's account
+  body      String?  // Text content of the message
+  mediaUrl  String?  // URL if media was downloaded/stored (requires separate handling)
+  mediaKey  String?  // Key to decrypt media (if needed)
+  mediaType String?  // Type of media (e.g., 'image', 'video', 'document', 'sticker', 'ptt')
+  ack       Int?     // Acknowledgement status (e.g., 0: pending, 1: sent, 2: delivered, 3: read, 4: played)
+  isDeleted Boolean  @default(false) // If the message was deleted
+  createdAt DateTime @default(now()) // Timestamp when the record was created in DB
+
+  @@index([chatId, timestamp]) // Index for querying messages within a chat sorted by time
 }
