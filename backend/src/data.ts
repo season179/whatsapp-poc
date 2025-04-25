@@ -18,6 +18,15 @@ export async function getChats() {
   return prisma.chat.findMany();
 }
 
+// Upsert chat record to ensure persistence
+export async function upsertChat(chatId: string, name?: string) {
+  return prisma.chat.upsert({
+    where: { chatId },
+    update: { name },
+    create: { chatId, name },
+  });
+}
+
 // Message CRUD
 export interface MessageInput {
   messageId: string;

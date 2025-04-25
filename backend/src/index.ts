@@ -2,6 +2,7 @@ import express, { Request, Response } from "express";
 import http from "http";
 import { Server } from "socket.io";
 import { Client, LocalAuth, MessageMedia } from "whatsapp-web.js";
+import { upsertChat, createMessage } from "./data";
 
 const app = express();
 const server = http.createServer(app);
@@ -28,16 +29,23 @@ client.on("ready", async () => {
     io.emit("chats", chatData);
 });
 
-// Relay incoming messages in real time
-client.on("message", (message) => {
-    io.emit("message", {
-        id: message.id._serialized,
-        from: message.from,
-        to: message.to,
-        body: message.body,
-        timestamp: message.timestamp,
-        type: message.type,
-    });
+// Persist and emit incoming messages
+client.on("message", async (message) => {
+    try {
+        const chatInst = await message.getChat();
+        const chatRec = await upsertChat(chatInst.id._serialized, chatInst.name);
+        const saved = await createMessage({
+            messageId: message.id._serialized,
+            chatId: chatRec.id,
+            fromMe: message.fromMe,
+            content: message.body,
+            timestamp: new Date(message.timestamp * 1000),
+            type: message.type
+        });
+        io.emit("message", saved);
+    } catch (err) {
+        console.error("Error saving incoming message", err);
+    }
 });
 
 // Socket.io event handlers for outgoing messages
@@ -86,6 +94,15 @@ app.get("/api/messages/:chatId", async (req: Request, res: Response) => {
         console.error("Error fetching messages", error);
         res.status(500).json({ error: "Failed to fetch messages" });
     }
+});
+
+// Error handling & auto-reconnect
+client.on("auth_failure", (msg) => {
+    console.error("Auth failure", msg);
+});
+client.on("disconnected", (reason) => {
+    console.warn("Client disconnected", reason);
+    setTimeout(() => client.initialize(), 5000);
 });
 
 // Start server and WhatsApp client

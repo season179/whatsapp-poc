@@ -26,10 +26,10 @@
   - [x] `GET /api/messages/:chatId`
 
 ## 4. Message Persistence & Flow (Backend)
-- [ ] On incoming/outgoing messages:
-  - [ ] Persist message records via Prisma.
-  - [ ] Emit saved messages in real time to connected clients.
-- [ ] Implement error handling and auto-reconnect logic.
+- [x] On incoming/outgoing messages:
+  - [x] Persist message records via Prisma.
+  - [x] Emit saved messages in real time to connected clients.
+- [x] Implement error handling and auto-reconnect logic.
 
 ## 5. Frontend Initialization & Connection
 - [ ] Scaffold React/TypeScript project in `frontend/`.
