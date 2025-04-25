@@ -137,3 +137,4 @@ dist
 
 # LocalAuth session data from whatsapp-web.js
 .wwebjs_auth/
+.wwebjs_cache/

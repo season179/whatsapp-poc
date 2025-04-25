@@ -1,3 +1,4 @@
+import { Message } from '@prisma/client';
 import prisma from './prisma';
 
 // Session CRUD
@@ -41,7 +42,7 @@ export async function createMessage(input: MessageInput) {
   return prisma.message.create({ data: input });
 }
 
-export async function getMessagesByChat(chatId: number) {
+export async function getMessagesByChat(chatId: number): Promise<Message[]> {
   return prisma.message.findMany({
     where: { chatId },
     orderBy: { timestamp: 'asc' },
