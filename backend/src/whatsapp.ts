@@ -16,42 +16,71 @@ let io: SocketIOServer;
 export const initializeWhatsAppClient = (socketIoServer: SocketIOServer) => {
   io = socketIoServer; // Store the io instance
 
-  console.log('Initializing WhatsApp client...');
+  console.log('[WApp] Initializing WhatsApp client instance...');
   client = new Client({
-    authStrategy: new LocalAuth(), // Use local session saving
+    authStrategy: new LocalAuth({ clientId: 'client-one' }), // Specify a clientId
     puppeteer: {
-      // args: ['--no-sandbox', '--disable-setuid-sandbox'], // Args required for some Linux environments
+      headless: true, // Run headless
+      args: ['--no-sandbox', '--disable-setuid-sandbox'], // Args required for some Linux environments
     },
   });
 
   // Event: QR code generated
   client.on('qr', (qr) => {
-    console.log('QR Code Received, emitting to frontend.');
-    // qrcode.generate(qr, { small: true }); // Optional: Display QR in terminal
+    console.log('[WApp Event - qr] QR Code Received. Emitting to frontend.');
     io.emit('qr', qr); // Send QR code string to frontend
+  });
+
+  // Event: Loading screen progress
+  client.on('loading_screen', (percent, message) => {
+    console.log(
+      `[WApp Event - loading_screen] Progress: ${percent}% - ${message}`
+    );
+  });
+
+  // Event: Client is authenticated
+  client.on('authenticated', () => {
+    console.log('[WApp Event - authenticated] Client is authenticated!');
+    // Session saved automatically by LocalAuth
+  });
+
+  // Event: LocalAuth saved session
+  client.on('remote_session_saved', () => {
+    console.log(
+      '[WApp Event - remote_session_saved] Session data saved by LocalAuth.'
+    );
+  });
+
+  // Event: Authentication failure
+  client.on('auth_failure', (msg) => {
+    console.error('[WApp Event - auth_failure] AUTHENTICATION FAILURE:', msg);
+    io.emit('auth_failure', msg);
   });
 
   // Event: Client is ready
   client.on('ready', async () => {
-    console.log('WhatsApp Client is ready!');
-    io.emit('ready'); // Notify frontend
+    console.log('[WApp Event - ready] Client is ready!');
+    io.emit('ready'); // Notify frontend that client is ready
 
     try {
-      // Update session status
+      console.log('[WApp Ready] Updating session status in DB...');
       await prisma.session.upsert({
-        where: { clientId: client.info.wid._serialized || 'default' },
+        where: { clientId: client.info.wid._serialized || 'client-one' }, // Use same clientId
         update: { status: 'connected', lastSync: new Date() },
         create: {
-          clientId: client.info.wid._serialized || 'default',
+          clientId: client.info.wid._serialized || 'client-one',
           status: 'connected',
           lastSync: new Date(),
         },
       });
+      console.log('[WApp Ready] Session status updated.');
 
       // Fetch and sync chats
-      console.log('Fetching chats...');
+      console.log('[WApp Ready] Fetching chats from WhatsApp...');
       const waChats: WAChat[] = await client.getChats();
-      console.log(`Fetched ${waChats.length} chats.`);
+      console.log(
+        `[WApp Ready] Fetched ${waChats.length} chats from WhatsApp.`
+      );
 
       const chatUpsertPromises = waChats.map(async (chat) => {
         // Skip chats that might cause issues (e.g., announcements)
@@ -91,23 +120,27 @@ export const initializeWhatsAppClient = (socketIoServer: SocketIOServer) => {
       });
 
       await Promise.all(chatUpsertPromises.filter((p) => p !== null));
-      console.log('Finished syncing chats to DB.');
+      console.log('[WApp Ready] Finished syncing chats to DB.');
 
       // Fetch all chats from DB to send to frontend
+      console.log('[WApp Ready] Fetching synced chats from DB...');
       const allDbChats = await prisma.chat.findMany({
-        orderBy: { lastMessageAt: 'desc' }, // Order by most recent activity
+        orderBy: { lastMessageAt: 'desc' },
       });
+      console.log(
+        `[WApp Ready] Fetched ${allDbChats.length} chats from DB. Emitting to frontend...`
+      );
       io.emit('chats', allDbChats);
-      console.log('Emitted chats to frontend.');
+      console.log('[WApp Ready] Emitted chats to frontend.');
     } catch (error) {
-      console.error('Error during ready event processing:', error);
+      console.error('[WApp Ready] Error during ready event processing:', error);
       io.emit('error', 'Failed to initialize chats');
     }
   });
 
-  // Event: Message received (both incoming and outgoing)
+  // Event: Message received
   client.on('message_create', async (message: WAMessage) => {
-    console.log('message_create event fired');
+    console.log('[WApp Event - message_create] Received message_create event');
     // message.fromMe indicates if the message was sent by the bot account
     // We only process/save if it's relevant (e.g., not saving our own outgoing here if handled separately)
     if (message.fromMe) {
@@ -172,16 +205,10 @@ export const initializeWhatsAppClient = (socketIoServer: SocketIOServer) => {
     }
   });
 
-  // Event: Authentication failure
-  client.on('auth_failure', (msg) => {
-    console.error('AUTHENTICATION FAILURE:', msg);
-    io.emit('auth_failure'); // Notify frontend
-  });
-
   // Event: Disconnected
   client.on('disconnected', async (reason) => {
-    console.log('Client was logged out:', reason);
-    io.emit('disconnected'); // Notify frontend
+    console.warn('[WApp Event - disconnected] Client was logged out:', reason);
+    io.emit('disconnected', reason);
     // Example: Update session status
     try {
       await prisma.session.updateMany({
@@ -196,10 +223,17 @@ export const initializeWhatsAppClient = (socketIoServer: SocketIOServer) => {
   });
 
   // Start the client initialization
-  client.initialize().catch((err) => {
-    console.error('Client initialization error:', err);
-    io.emit('init_error');
-  });
+  console.log('[WApp] Calling client.initialize()...');
+  client
+    .initialize()
+    .then(() => {
+      console.log('[WApp] client.initialize() promise resolved.');
+    })
+    .catch((err) => {
+      console.error('[WApp] client.initialize() failed:', err);
+      io.emit('init_error', 'Client initialization failed');
+    });
+  console.log('[WApp] client.initialize() called.');
 
   return client;
 };

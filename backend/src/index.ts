@@ -5,6 +5,7 @@ import { initializeWhatsAppClient, getClient } from './whatsapp';
 import { prisma } from './db'; // Ensure prisma client is imported
 import { Message as WAMessage, Chat as WAChat } from 'whatsapp-web.js'; // Import message type
 import { Prisma } from '@prisma/client'; // Import Prisma namespace for types
+import { Router } from 'express'; // Import Router
 
 const app = express();
 const server = http.createServer(app);
@@ -92,7 +93,50 @@ io.on('connection', (socket) => {
   });
 });
 
-// TODO: Add REST API endpoints (/api/chats, /api/messages/:chatId)
+// --- API Routes ---
+const apiRouter = Router();
+
+// GET /api/chats - Retrieve all chats from the database
+apiRouter.get('/chats', async (req, res) => {
+  try {
+    const chats = await prisma.chat.findMany({
+      orderBy: {
+        lastMessageAt: 'desc', // Order by most recent message first
+      },
+    });
+    res.json(chats);
+  } catch (error) {
+    console.error('Error fetching chats:', error);
+    res.status(500).json({ error: 'Failed to fetch chats' });
+  }
+});
+
+// GET /api/messages/:chatId - Retrieve messages for a specific chat
+apiRouter.get('/messages/:chatId', async (req, res) => {
+  const { chatId } = req.params;
+  if (!chatId) {
+    return res.status(400).json({ error: 'Chat ID parameter is required' });
+  }
+
+  try {
+    const messages = await prisma.message.findMany({
+      where: {
+        chatId: chatId,
+      },
+      orderBy: {
+        timestamp: 'asc', // Order messages chronologically
+      },
+      take: 100, // Limit the number of messages fetched for performance
+    });
+    res.json(messages);
+  } catch (error) {
+    console.error(`Error fetching messages for chat ${chatId}:`, error);
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+// Mount the API router
+app.use('/api', apiRouter);
 
 server.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
