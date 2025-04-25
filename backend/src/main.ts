@@ -2,7 +2,8 @@
 import { toString as qrToString } from "qrcode";
 // Import the default export and access properties
 import WAWebJS from "whatsapp-web.js";
-const { Client, LocalAuth, MessageMedia } = WAWebJS; // Destructure from the default export
+// Remove Contact/GroupChat from import, types are inferred
+const { Client, LocalAuth, MessageMedia } = WAWebJS; 
 
 const client = new Client({
     authStrategy: new LocalAuth(),
@@ -31,14 +32,48 @@ client.on("ready", () => {
 });
 
 // Listen for incoming messages
-client.on("message_create", async (message) => {
+client.on("message_create", async (message) => { 
     console.log(`Received message from ${message.from}: ${message.body}`);
+    const chat = await message.getChat(); // Get chat for checking group status and replying
 
-    // Check if the message has media
+    // --- Mention Handling ---
+    try {
+        const mentionedUsers = await message.getMentions();
+        for (const contact of mentionedUsers) {
+            // contact type is inferred here
+            console.log(`User mentioned: ${contact.pushname || contact.id.user} (${contact.id._serialized})`);
+        }
+
+        // Check chat.isGroup instead of message.isGroup
+        if (chat.isGroup) { 
+            const mentionedGroups = await message.getGroupMentions();
+             for (const group of mentionedGroups) {
+                 // group type is inferred here
+                console.log(`Group mentioned: ${group.name} (${group.id._serialized})`);
+            }
+        }
+       
+        // Simple !mentionme command
+        if (message.body === '!mentionme') {
+            const sender = await message.getContact(); // sender type is inferred
+             // Use sender's serialized ID for mentions array
+            await chat.sendMessage(`Hello @${sender.id.user}!`, {
+                mentions: [sender.id._serialized] 
+            });
+            console.log(`Replied to !mentionme from ${sender.id.user}`);
+        }
+
+    } catch (error) {
+        console.error("Error handling mentions:", error);
+    }
+    // --- End Mention Handling ---
+
+
+    // --- Attachment Handling ---
     if (message.hasMedia) {
         console.log(`Message from ${message.from} has media, attempting to download...`);
         try {
-            const media = await message.downloadMedia();
+            const media = await message.downloadMedia(); // media type is inferred
             if (media) {
                 // Log media details
                 console.log(`Media downloaded:
@@ -53,6 +88,7 @@ client.on("message_create", async (message) => {
             console.error(`Error downloading media from message ${message.id._serialized}:`, error);
         }
     }
+    // --- End Attachment Handling ---
 });
 
 // Initialize the client
