@@ -1,41 +1,20 @@
 {
-  "name": "whatsapp-bot-backend",
-  "version": "1.0.0",
-  "private": true,
-  "main": "dist/index.js",
-  "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:generate": "prisma generate",
-    "lint": "eslint . --ext .ts",
-    "format": "prettier --write \"src/**/*.ts\""
-  },
-  "dependencies": {
-    "@prisma/client": "^5.17.0",
-    "express": "^4.19.2",
-    "qrcode-terminal": "^0.12.0",
-    "socket.io": "^4.7.5",
-    "sqlite3": "^5.1.7",
-    "whatsapp-web.js": "^1.27.0"
-  },
-  "devDependencies": {
-    "@types/express": "^4.17.21",
-    "@types/node": "^20.14.10",
-    "@types/qrcode-terminal": "^0.12.2",
-    "@types/ws": "^8.5.10",
-    "@typescript-eslint/eslint-plugin": "^8.31.0",
-    "@typescript-eslint/parser": "^8.31.0",
-    "eslint": "^9.25.1",
-    "eslint-config-prettier": "^10.1.2",
-    "eslint-plugin-prettier": "^5.2.6",
-    "prettier": "^3.5.3",
-    "prisma": "^5.17.0",
-    "ts-node-dev": "^2.0.0",
-    "typescript": "^5.5.3"
-  },
-  "overrides": {
-    "puppeteer": "^24.7.2"
-  }
+    "name": "backend",
+    "version": "1.0.0",
+    "type": "module",
+    "main": "dist/main.js",
+    "scripts": {
+        "dev": "tsx watch src/main.ts",
+        "build": "tsc --build",
+        "start": "node dist/main.js"
+    },
+    "dependencies": {
+        "whatsapp-web.js": "^1.27.0",
+        "qrcode": "^1.5.1"
+    },
+    "devDependencies": {
+        "typescript": "^5.8.3",
+        "ts-node-dev": "^2.0.0",
+        "tsx": "^4.7.0"
+    }
 }
