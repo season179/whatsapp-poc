@@ -3,6 +3,8 @@ import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import { initializeWhatsAppClient, getClient } from './whatsapp';
 import { prisma } from './db'; // Ensure prisma client is imported
+import { Message as WAMessage, Chat as WAChat } from 'whatsapp-web.js'; // Import message type
+import { Prisma } from '@prisma/client'; // Import Prisma namespace for types
 
 const app = express();
 const server = http.createServer(app);
@@ -29,22 +31,57 @@ initializeWhatsAppClient(io);
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  // Example: Handle message sending from frontend
+  // Handle message sending from frontend
   socket.on(
     'sendMessage',
     async (data: { chatId: string; message: string }) => {
       console.log('sendMessage event received:', data);
+      let sentWAMessage: WAMessage | null = null;
       try {
         const client = getClient();
-        const msg = await client.sendMessage(data.chatId, data.message);
-        console.log('Message sent:', msg.id._serialized);
-        // TODO: Persist sent message
-        // TODO: Emit confirmation/update back to frontend?
+        sentWAMessage = await client.sendMessage(data.chatId, data.message);
+        console.log('Message sent via WhatsApp:', sentWAMessage.id._serialized);
+
+        const waChat: WAChat = await sentWAMessage.getChat();
+        const messageTimestamp =
+          typeof sentWAMessage.timestamp === 'number'
+            ? new Date(sentWAMessage.timestamp * 1000)
+            : new Date(); // Fallback to now()
+
+        const messageData: Prisma.MessageCreateInput = {
+          id: sentWAMessage.id._serialized,
+          chat: { connect: { id: waChat.id._serialized } },
+          timestamp: messageTimestamp,
+          fromMe: sentWAMessage.fromMe,
+          body: sentWAMessage.body || null,
+          mediaUrl: sentWAMessage.hasMedia ? 'media_placeholder' : null,
+          mediaType: sentWAMessage.hasMedia ? sentWAMessage.type : null,
+          // Ensure ack is a number or null
+          ack: typeof sentWAMessage.ack === 'number' ? sentWAMessage.ack : null,
+        };
+
+        const savedMessage = await prisma.$transaction(async (tx) => {
+          // Explicitly type the update data
+          const chatUpdateData: Prisma.ChatUpdateInput = {
+            lastMessageAt: messageTimestamp,
+          };
+          await tx.chat.update({
+            where: { id: waChat.id._serialized },
+            data: chatUpdateData,
+          });
+          return tx.message.create({
+            data: messageData,
+          });
+        });
+
+        console.log('Saved outgoing message to DB:', savedMessage.id);
+        io.emit('message', savedMessage);
       } catch (error) {
-        console.error('Error sending message:', error);
+        console.error('Error sending or saving message:', error);
         socket.emit('send_message_error', {
           chatId: data.chatId,
-          error: 'Failed to send message',
+          tempId: sentWAMessage?.id._serialized,
+          error: 'Failed to send or save message',
         });
       }
     }

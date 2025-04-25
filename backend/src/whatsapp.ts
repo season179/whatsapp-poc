@@ -1,7 +1,13 @@
-import { Client, LocalAuth } from 'whatsapp-web.js';
+import {
+  Client,
+  LocalAuth,
+  Message as WAMessage,
+  Chat as WAChat,
+} from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 import { Server as SocketIOServer } from 'socket.io';
 import { prisma } from './db';
+import { Prisma } from '@prisma/client';
 
 let client: Client;
 let io: SocketIOServer;
@@ -30,8 +36,8 @@ export const initializeWhatsAppClient = (socketIoServer: SocketIOServer) => {
     console.log('WhatsApp Client is ready!');
     io.emit('ready'); // Notify frontend
 
-    // Example: Update session status in DB
     try {
+      // Update session status
       await prisma.session.upsert({
         where: { clientId: client.info.wid._serialized || 'default' },
         update: { status: 'connected', lastSync: new Date() },
@@ -41,24 +47,129 @@ export const initializeWhatsAppClient = (socketIoServer: SocketIOServer) => {
           lastSync: new Date(),
         },
       });
-    } catch (error) {
-      console.error('Error updating session status:', error);
-    }
 
-    // TODO: Fetch initial chats and emit?
+      // Fetch and sync chats
+      console.log('Fetching chats...');
+      const waChats: WAChat[] = await client.getChats();
+      console.log(`Fetched ${waChats.length} chats.`);
+
+      const chatUpsertPromises = waChats.map(async (chat) => {
+        // Skip chats that might cause issues (e.g., announcements)
+        if (!chat.id._serialized) return null;
+
+        const chatData: Prisma.ChatUpsertArgs = {
+          where: { id: chat.id._serialized },
+          update: {
+            name: chat.name || chat.id.user,
+            isGroup: chat.isGroup,
+            archived: chat.archived,
+            pinned: chat.pinned,
+            // lastMessageAt and unreadCount are harder to sync reliably here,
+            // best updated via message events or specific chat update events.
+          },
+          create: {
+            id: chat.id._serialized,
+            name: chat.name || chat.id.user,
+            isGroup: chat.isGroup,
+            archived: chat.archived,
+            pinned: chat.pinned,
+            lastMessageAt: chat.timestamp
+              ? new Date(chat.timestamp * 1000)
+              : null,
+            unreadCount: chat.unreadCount,
+          },
+        };
+        try {
+          return prisma.chat.upsert(chatData);
+        } catch (upsertError) {
+          console.error(
+            `Error upserting chat ${chat.id._serialized}:`,
+            upsertError
+          );
+          return null;
+        }
+      });
+
+      await Promise.all(chatUpsertPromises.filter((p) => p !== null));
+      console.log('Finished syncing chats to DB.');
+
+      // Fetch all chats from DB to send to frontend
+      const allDbChats = await prisma.chat.findMany({
+        orderBy: { lastMessageAt: 'desc' }, // Order by most recent activity
+      });
+      io.emit('chats', allDbChats);
+      console.log('Emitted chats to frontend.');
+    } catch (error) {
+      console.error('Error during ready event processing:', error);
+      io.emit('error', 'Failed to initialize chats');
+    }
   });
 
-  // Event: Message received
-  client.on('message_create', async (message) => {
-    console.log('Message received:', message.body);
+  // Event: Message received (both incoming and outgoing)
+  client.on('message_create', async (message: WAMessage) => {
+    console.log('message_create event fired');
+    // message.fromMe indicates if the message was sent by the bot account
+    // We only process/save if it's relevant (e.g., not saving our own outgoing here if handled separately)
+    if (message.fromMe) {
+      console.log('Skipping own outgoing message in message_create handler.');
+      // Outgoing messages will be persisted after successful send via the socket handler
+      return;
+    }
 
-    // TODO: Persist message to DB
-    // TODO: Emit message to frontend
+    console.log(`Received message from ${message.from}:`, message.body);
 
-    // Example: Auto-reply (use with caution!)
-    // if (message.body === '/ping') {
-    //   await client.sendMessage(message.from, 'pong');
-    // }
+    try {
+      const chat = await message.getChat();
+      const contact = await message.getContact();
+
+      const chatData = {
+        id: chat.id._serialized,
+        name: chat.isGroup
+          ? chat.name
+          : contact.name || contact.pushname || chat.id.user,
+        isGroup: chat.isGroup,
+        lastMessageAt: new Date(message.timestamp * 1000),
+        archived: chat.archived,
+        pinned: chat.pinned,
+        // unreadCount needs careful handling, might need updates from 'unread_count' event
+      };
+
+      const messageData = {
+        id: message.id._serialized,
+        chatId: chat.id._serialized,
+        timestamp: new Date(message.timestamp * 1000),
+        fromMe: message.fromMe,
+        body: message.body || null,
+        mediaUrl: message.hasMedia ? 'media_placeholder' : null, // Placeholder - media handling is complex
+        mediaType: message.hasMedia ? message.type : null,
+        ack: message.ack,
+      };
+
+      // Use transaction to ensure chat exists before adding message
+      const savedMessage = await prisma.$transaction(async (tx) => {
+        await tx.chat.upsert({
+          where: { id: chatData.id },
+          update: {
+            name: chatData.name,
+            lastMessageAt: chatData.lastMessageAt,
+            archived: chatData.archived,
+            pinned: chatData.pinned,
+          },
+          create: chatData,
+        });
+
+        return tx.message.create({
+          data: messageData,
+        });
+      });
+
+      console.log('Saved incoming message to DB:', savedMessage.id);
+
+      // Emit the *saved* message data (or a formatted version) to the frontend
+      io.emit('message', savedMessage);
+    } catch (error) {
+      console.error('Error processing/saving incoming message:', error);
+    }
   });
 
   // Event: Authentication failure
