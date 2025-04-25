@@ -2,6 +2,9 @@
   "name": "whatsapp-bot",
   "version": "1.0.0",
   "private": true,
+  "scripts": {
+    "backend:dev": "npm run dev --workspace backend"
+  },
   "workspaces": [
     "backend",
     "frontend"

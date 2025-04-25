@@ -15,15 +15,15 @@
 - [x] Integrate Prisma Client in code for CRUD operations.
 
 ## 3. WhatsApp Client & Real-time Layer (Backend)
-- [ ] Set up whatsapp-web.js client with `LocalAuth`.
-  - [ ] Handle `qr` event: emit QR string over socket.io.
-  - [ ] Handle `ready` event: fetch chats & emit list.
-- [ ] Integrate socket.io into Express server:
-  - [ ] Emit `qr`, `chats`, `message` events to frontend.
-  - [ ] Listen for `sendMessage` and `sendMedia` events and call WhatsApp API.
-- [ ] Implement REST endpoints as fallback:
-  - [ ] `GET /api/chats`
-  - [ ] `GET /api/messages/:chatId`
+- [x] Set up whatsapp-web.js client with `LocalAuth`.
+  - [x] Handle `qr` event: emit QR string over socket.io.
+  - [x] Handle `ready` event: fetch chats & emit list.
+- [x] Integrate socket.io into Express server:
+  - [x] Emit `qr`, `chats`, `message` events to frontend.
+  - [x] Listen for `sendMessage` and `sendMedia` events and call WhatsApp API.
+- [x] Implement REST endpoints as fallback:
+  - [x] `GET /api/chats`
+  - [x] `GET /api/messages/:chatId`
 
 ## 4. Message Persistence & Flow (Backend)
 - [ ] On incoming/outgoing messages:
