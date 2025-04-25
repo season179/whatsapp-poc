@@ -32,11 +32,11 @@
 - [x] Implement error handling and auto-reconnect logic.
 
 ## 5. Frontend Initialization & Connection
-- [ ] Scaffold React/TypeScript project in `frontend/`.
-  - [ ] Install socket.io-client and qrcode.react.
-- [ ] Initialize socket.io-client and manage connection status.
-  - [ ] Subscribe to `qr`, `chats`, `message` events.
-  - [ ] Emit `sendMessage` and `sendMedia` events on user actions.
+- [x] Scaffold React/TypeScript project in `frontend/`.
+  - [x] Install socket.io-client and qrcode.react.
+- [x] Initialize socket.io-client and manage connection status.
+  - [x] Subscribe to `qr`, `chats`, `message` events.
+  - [x] Emit `sendMessage` and `sendMedia` events on user actions.
 
 ## 6. UI Components (Frontend)
 - [ ] Build **QR Scanner** component to render QR for scanning.
